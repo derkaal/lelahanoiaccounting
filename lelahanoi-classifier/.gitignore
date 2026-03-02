@@ -1,7 +1,8 @@
 # Data files — never commit real financial data
-data/bank/*.csv
-data/amazon/*.csv
-data/output/*.csv
+data/**/bank/*.csv
+data/**/amazon/*.csv
+data/**/output/*.csv
+data/**/ready2order/*.pdf
 data/invoices/**/*.pdf
 
 # Keep folder structure
