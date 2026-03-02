@@ -4,6 +4,12 @@ data/**/amazon/*.csv
 data/**/output/*.csv
 data/**/ready2order/*.pdf
 data/invoices/**/*.pdf
+data/**/bank/*.csv
+data/**/amazon/*.csv
+data/**/output/*.csv
+data/**/output/*.html
+data/**/invoices/**/*.pdf
+data/**/invoices/**/*.PDF
 
 # Keep folder structure
 !data/**/.gitkeep

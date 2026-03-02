@@ -15,29 +15,35 @@ system.
 ```
 lelahanoi-classifier/
 ├── classify.py          # Main CLI
+├── check_receipts.py    # Receipt checker and HTML report generator
 ├── rules.py             # Deterministic classification rules
 ├── amazon.py            # Amazon CSV parser + order ID extractor
 ├── api_client.py        # Claude API batch classifier
-├── output.py            # CSV writer + summary printer
+├── output.py            # CSV writer + summary printer (semicolon-delimited)
 ├── requirements.txt
 ├── README.md
 │
 └── data/                # ← gitignored; never committed to GitHub
-    ├── bank/            # Comdirect CSV exports, one per month
-    │   └── .gitkeep
-    ├── amazon/          # Amazon Order History CSV exports
-    │   └── .gitkeep
-    ├── invoices/        # PDF invoices and receipts
-    │   ├── amazon/      # Amazon PDF invoices, named by order ID
-    │   ├── suppliers/   # Metro, Tafelmaier, Deli Tadka, etc.
-    │   └── other/       # Everything else
-    └── output/          # Classified CSVs written here
-        └── .gitkeep
+    └── 2026-02/         # One folder per month
+        ├── bank/        # Comdirect CSV export for this month
+        │   └── .gitkeep
+        ├── amazon/      # Amazon Order History CSV for this month
+        │   └── .gitkeep
+        ├── ready2order/ # ready2order reports (for future r2o_parser.py)
+        │   └── .gitkeep
+        ├── invoices/    # PDF receipts for this month
+        │   ├── amazon/      # Named by order ID: 028-XXXXXXX-XXXXXXX.pdf
+        │   ├── suppliers/   # Named: {vendor-slug}_{YYYY-MM-DD}.pdf
+        │   └── other/       # Everything else
+        └── output/      # Classified CSV and reports written here
+            └── .gitkeep
 ```
 
 > **Important:** All files inside `data/` are gitignored.
 > Never commit bank statements, invoices, or order history to GitHub.
 > The `.gitkeep` files are the only thing that preserves the folder structure in git.
+>
+> **Note:** Output CSVs use `;` as delimiter (European/German convention).
 
 ---
 
@@ -54,21 +60,55 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ## Preparing your data
 
+Each month gets its own folder under `data/`. For February 2026:
+
 1. **Bank statement** — Export your Comdirect account as CSV:
    - In the Comdirect app/website: Konto → Umsätze → Export → CSV
-   - Save it to `data/bank/`, e.g. `data/bank/umsaetze_2026-02.csv`
+   - Save it to `data/2026-02/bank/`, e.g. `data/2026-02/bank/umsaetze_2026-02.csv`
    - The filename should contain the month (`2026-02` or `202602`) so
      the tool can find it automatically.
 
 2. **Amazon orders** (optional but recommended) — Export your order history:
    - Go to [amazon.de/gp/b2b/reports](https://www.amazon.de/gp/b2b/reports)
      or use the "Order History Reports" page
-   - Save it to `data/amazon/`, e.g. `data/amazon/Order_History.csv`
+   - Save it to `data/2026-02/amazon/`, e.g. `data/2026-02/amazon/Order_History.csv`
 
-3. **Invoices** (for your records, not used by the classifier):
-   - `data/invoices/amazon/`    — Amazon PDF receipts, one per order ID
-   - `data/invoices/suppliers/` — Metro, Tafelmaier, Deli Tadka, etc.
-   - `data/invoices/other/`     — Everything else
+3. **Invoices** — Store PDFs in `data/2026-02/invoices/` after running the classifier.
+   See the [Receipt management](#receipt-management) section below for naming conventions.
+
+---
+
+## Receipt management
+
+Store receipts in `data/YYYY-MM/invoices/` using this naming convention:
+
+| Type | Folder | Filename format | Example |
+|---|---|---|---|
+| Amazon | `invoices/amazon/` | `{order-id}.pdf` | `028-8453875-8909143.pdf` |
+| Suppliers | `invoices/suppliers/` | `{vendor-slug}_{YYYY-MM-DD}.pdf` | `metro_2026-02-24.pdf` |
+| Other | `invoices/other/` | anything descriptive | `bauhaus_2026-02-02_kassenbon.pdf` |
+
+Vendor slugs: `metro`, `gema`, `ready2order`, `sumup`, `tafelmaier`, `delitadka`, `michl_miete`, `mediamarkt`, `bayerstorfer`, `butlers`, `obi`, `bauhaus`, `hagebau`
+
+### Checking receipt status
+
+```bash
+# Terminal summary
+python check_receipts.py --month 2026-02
+
+# HTML report (open in browser)
+python check_receipts.py --month 2026-02 --report
+
+# CSV of missing receipts only
+python check_receipts.py --month 2026-02 --csv
+```
+
+Output files go to `data/{month}/output/`:
+- `receipt_status_{month}.html` — visual checklist for the accountant
+- `missing_receipts_{month}.csv` — follow-up list (semicolon-delimited)
+
+> `check_receipts.py` requires the classified CSV to exist first.
+> Run `python classify.py --month 2026-02` before checking receipts.
 
 ---
 
@@ -81,9 +121,9 @@ python classify.py --month 2026-02
 ```
 
 This will:
-- Find `data/bank/*2026-02*.csv` (or the only CSV in `data/bank/`)
-- Find the most recently modified CSV in `data/amazon/`
-- Write output to `data/output/classified_2026-02.csv`
+- Find `data/2026-02/bank/*.csv` (auto-detected)
+- Find the most recently modified CSV in `data/2026-02/amazon/` (optional)
+- Write output to `data/2026-02/output/classified_2026-02.csv` (semicolon-delimited)
 - Print a summary to the terminal
 
 ### Dry run — summary only, no file written
@@ -96,9 +136,9 @@ python classify.py --month 2026-02 --dry-run
 
 ```bash
 python classify.py \
-  --bank data/bank/umsaetze_feb2026.csv \
-  --amazon data/amazon/Order_History.csv \
-  --output data/output/classified_feb2026.csv \
+  --bank data/2026-02/bank/umsaetze_feb2026.csv \
+  --amazon data/2026-02/amazon/Order_History.csv \
+  --output data/2026-02/output/classified_2026-02.csv \
   --month 2026-02
 ```
 
