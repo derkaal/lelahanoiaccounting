@@ -6,13 +6,21 @@ Classifies Comdirect bank statement transactions for the Le La Hanoi café,
 separating café business expenses from personal ones.
 
 Usage:
+    # Minimal — relies on data/ folder defaults
+    python classify.py --month 2026-02
+
+    # Explicit paths
     python classify.py \\
-        --bank umsaetze_feb2026.csv \\
-        --amazon Order_History.csv \\
-        --output classified_feb2026.csv \\
+        --bank data/bank/umsaetze_feb2026.csv \\
+        --amazon data/amazon/Order_History.csv \\
+        --output data/output/classified_feb2026.csv \\
         --month 2026-02
 
-    python classify.py --bank umsaetze_feb2026.csv --dry-run
+    # Dry run (no file written)
+    python classify.py --month 2026-02 --dry-run
+
+Drop your Comdirect CSV in data/bank/ and your Amazon CSV in data/amazon/,
+then run:  python classify.py --month 2026-02
 """
 
 import argparse
@@ -27,6 +35,76 @@ from amazon import extract_order_id, load_amazon_orders
 from api_client import classify_transactions
 from output import format_rows_for_output, print_summary, write_output_csv
 from rules import RuleResult, apply_rules
+
+
+# ---------------------------------------------------------------------------
+# Directory auto-detection helpers
+# ---------------------------------------------------------------------------
+
+def resolve_bank_path(bank_arg: str, month: Optional[str]) -> str:
+    """
+    If --bank points to a directory, find the CSV inside it that matches
+    the month pattern (e.g. *2026-02* or *202602*).  Falls back to the
+    single CSV in the directory if there is only one.
+
+    Returns the resolved file path as a string.
+    """
+    p = Path(bank_arg)
+    if p.is_file():
+        return str(p)
+    if not p.is_dir():
+        raise FileNotFoundError(f"Bank path not found: {bank_arg}")
+
+    candidates = sorted(p.glob("*.csv"))
+    if not candidates:
+        raise FileNotFoundError(f"No CSV files found in bank directory: {p}")
+
+    if month:
+        # Try both YYYY-MM and YYYYMM variants in the filename
+        month_compact = month.replace("-", "")
+        matches = [f for f in candidates if month in f.name or month_compact in f.name]
+        if len(matches) == 1:
+            return str(matches[0])
+        if len(matches) > 1:
+            raise ValueError(
+                f"Multiple bank CSVs match month {month} in {p}: "
+                + ", ".join(f.name for f in matches)
+                + " — please pass an explicit --bank path."
+            )
+        # No filename match — if there's only one CSV, use it
+        if len(candidates) == 1:
+            print(f"  Warning: no filename match for {month}; using {candidates[0].name}")
+            return str(candidates[0])
+        raise FileNotFoundError(
+            f"No bank CSV matching '{month}' found in {p}. "
+            f"Available: {[f.name for f in candidates]}"
+        )
+
+    if len(candidates) == 1:
+        return str(candidates[0])
+    raise ValueError(
+        f"Multiple CSVs in {p} and no --month given to disambiguate: "
+        + ", ".join(f.name for f in candidates)
+    )
+
+
+def resolve_amazon_path(amazon_arg: Optional[str]) -> Optional[str]:
+    """
+    If --amazon points to a directory, return the most recently modified CSV
+    inside it.  Returns None if no CSV is found (Amazon data is optional).
+    """
+    if amazon_arg is None:
+        return None
+    p = Path(amazon_arg)
+    if p.is_file():
+        return str(p)
+    if not p.is_dir():
+        return None  # directory doesn't exist yet — Amazon data is optional
+
+    candidates = sorted(p.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
+    if not candidates:
+        return None
+    return str(candidates[0])
 
 
 # ---------------------------------------------------------------------------
@@ -366,18 +444,30 @@ def main() -> None:
     )
     parser.add_argument(
         "--bank",
-        required=True,
-        help="Path to Comdirect CSV export (ISO-8859-1, semicolon-separated)",
+        default="data/bank",
+        help=(
+            "Path to Comdirect CSV file or directory. "
+            "If a directory is given, the file matching *{month}* is used. "
+            "(default: data/bank/)"
+        ),
     )
     parser.add_argument(
         "--amazon",
-        default=None,
-        help="Path to Amazon Order History CSV (UTF-8)",
+        default="data/amazon",
+        help=(
+            "Path to Amazon Order History CSV file or directory. "
+            "If a directory is given, the most recently modified CSV is used. "
+            "(default: data/amazon/)"
+        ),
     )
     parser.add_argument(
         "--output",
-        default="classified_output.csv",
-        help="Output CSV path (default: classified_output.csv)",
+        default=None,
+        help=(
+            "Output CSV path. "
+            "Defaults to data/output/classified_{month}.csv "
+            "(or data/output/classified_output.csv if --month not set)."
+        ),
     )
     parser.add_argument(
         "--month",
@@ -418,6 +508,20 @@ def main() -> None:
         if not re.match(r'^\d{4}-\d{2}$', args.month):
             parser.error("--month must be in YYYY-MM format, e.g. 2026-02")
 
+    # Resolve directory → file paths
+    try:
+        bank_path = resolve_bank_path(args.bank, args.month)
+    except (FileNotFoundError, ValueError) as e:
+        parser.error(str(e))
+
+    amazon_path = resolve_amazon_path(args.amazon)
+
+    # Build default output path when not explicitly set
+    output_path = args.output
+    if output_path is None:
+        suffix = args.month if args.month else "output"
+        output_path = f"data/output/classified_{suffix}.csv"
+
     # If --no-api, monkey-patch api_client to skip calls
     if args.no_api:
         import api_client
@@ -437,9 +541,9 @@ def main() -> None:
 
     try:
         classify_all(
-            bank_path=args.bank,
-            amazon_path=args.amazon,
-            output_path=args.output,
+            bank_path=bank_path,
+            amazon_path=amazon_path,
+            output_path=output_path,
             month_filter=args.month,
             dry_run=args.dry_run,
             model=args.model,

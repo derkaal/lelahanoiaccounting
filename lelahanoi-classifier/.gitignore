@@ -1,6 +1,13 @@
+# Data files — never commit real financial data
+data/bank/*.csv
+data/amazon/*.csv
+data/output/*.csv
+data/invoices/**/*.pdf
+
+# Keep folder structure
+!data/**/.gitkeep
+
+# Python
 __pycache__/
-*.py[cod]
-*.pyo
+*.pyc
 .env
-*.csv
-!sample_*.csv

@@ -10,102 +10,121 @@ system.
 
 ---
 
-## Features
+## Folder structure
 
-- Parses Comdirect CSV exports (ISO-8859-1, semicolon-separated, 4-row header skip)
-- Parses Amazon Order History CSV and cross-references order IDs found in bank text
-- Applies **deterministic rules** for ~30 known vendors/patterns (no API needed)
-- Sends remaining ambiguous transactions to **Claude API** in batches of 20
-- Produces a classified CSV with full audit trail (rule matched, confidence, reason)
-- Prints a human-readable summary with totals by classification and category
+```
+lelahanoi-classifier/
+├── classify.py          # Main CLI
+├── rules.py             # Deterministic classification rules
+├── amazon.py            # Amazon CSV parser + order ID extractor
+├── api_client.py        # Claude API batch classifier
+├── output.py            # CSV writer + summary printer
+├── requirements.txt
+├── README.md
+│
+└── data/                # ← gitignored; never committed to GitHub
+    ├── bank/            # Comdirect CSV exports, one per month
+    │   └── .gitkeep
+    ├── amazon/          # Amazon Order History CSV exports
+    │   └── .gitkeep
+    ├── invoices/        # PDF invoices and receipts
+    │   ├── amazon/      # Amazon PDF invoices, named by order ID
+    │   ├── suppliers/   # Metro, Tafelmaier, Deli Tadka, etc.
+    │   └── other/       # Everything else
+    └── output/          # Classified CSVs written here
+        └── .gitkeep
+```
+
+> **Important:** All files inside `data/` are gitignored.
+> Never commit bank statements, invoices, or order history to GitHub.
+> The `.gitkeep` files are the only thing that preserves the folder structure in git.
 
 ---
 
-## Installation
+## Setup
 
 ```bash
+git clone <repo-url>
 cd lelahanoi-classifier
 pip install -r requirements.txt
-```
-
-Set your Anthropic API key:
-
-```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ---
 
-## Usage
+## Preparing your data
 
-### Basic
+1. **Bank statement** — Export your Comdirect account as CSV:
+   - In the Comdirect app/website: Konto → Umsätze → Export → CSV
+   - Save it to `data/bank/`, e.g. `data/bank/umsaetze_2026-02.csv`
+   - The filename should contain the month (`2026-02` or `202602`) so
+     the tool can find it automatically.
 
-```bash
-python classify.py \
-  --bank umsaetze_feb2026.csv \
-  --amazon Order_History.csv \
-  --output classified_feb2026.csv \
-  --month 2026-02
-```
+2. **Amazon orders** (optional but recommended) — Export your order history:
+   - Go to [amazon.de/gp/b2b/reports](https://www.amazon.de/gp/b2b/reports)
+     or use the "Order History Reports" page
+   - Save it to `data/amazon/`, e.g. `data/amazon/Order_History.csv`
 
-### Without Amazon CSV
-
-```bash
-python classify.py \
-  --bank umsaetze_feb2026.csv \
-  --output classified_feb2026.csv \
-  --month 2026-02
-```
-
-### Dry run (no output file written)
-
-```bash
-python classify.py \
-  --bank umsaetze_feb2026.csv \
-  --amazon Order_History.csv \
-  --month 2026-02 \
-  --dry-run
-```
-
-### Skip API calls (rules-only classification)
-
-```bash
-python classify.py \
-  --bank umsaetze_feb2026.csv \
-  --output classified_feb2026.csv \
-  --month 2026-02 \
-  --no-api
-```
-
-### Verbose output
-
-```bash
-python classify.py \
-  --bank umsaetze_feb2026.csv \
-  --output classified_feb2026.csv \
-  --month 2026-02 \
-  -v
-```
+3. **Invoices** (for your records, not used by the classifier):
+   - `data/invoices/amazon/`    — Amazon PDF receipts, one per order ID
+   - `data/invoices/suppliers/` — Metro, Tafelmaier, Deli Tadka, etc.
+   - `data/invoices/other/`     — Everything else
 
 ---
 
-## CLI Options
+## Running
 
-| Option | Description |
-|---|---|
-| `--bank` | Path to Comdirect CSV export (required) |
-| `--amazon` | Path to Amazon Order History CSV (optional) |
-| `--output` | Output CSV path (default: `classified_output.csv`) |
-| `--month` | Filter to YYYY-MM (e.g. `2026-02`) |
-| `--dry-run` | Print summary, skip writing output file |
-| `--no-api` | Only apply deterministic rules, skip Claude API |
-| `--model` | Claude model (default: `claude-sonnet-4-5`) |
-| `--api-key` | Anthropic API key (or use `ANTHROPIC_API_KEY` env var) |
-| `-v` / `--verbose` | Detailed progress output |
+### Minimal — auto-detect files from data/ folders
+
+```bash
+python classify.py --month 2026-02
+```
+
+This will:
+- Find `data/bank/*2026-02*.csv` (or the only CSV in `data/bank/`)
+- Find the most recently modified CSV in `data/amazon/`
+- Write output to `data/output/classified_2026-02.csv`
+- Print a summary to the terminal
+
+### Dry run — summary only, no file written
+
+```bash
+python classify.py --month 2026-02 --dry-run
+```
+
+### Explicit paths
+
+```bash
+python classify.py \
+  --bank data/bank/umsaetze_feb2026.csv \
+  --amazon data/amazon/Order_History.csv \
+  --output data/output/classified_feb2026.csv \
+  --month 2026-02
+```
+
+### Rules only — skip Claude API
+
+```bash
+python classify.py --month 2026-02 --no-api
+```
+
+### All options
+
+| Option | Default | Description |
+|---|---|---|
+| `--bank` | `data/bank/` | CSV file or directory. Directory → auto-selects by month. |
+| `--amazon` | `data/amazon/` | CSV file or directory. Directory → uses newest file. |
+| `--output` | `data/output/classified_{month}.csv` | Output file path. |
+| `--month` | *(none)* | Filter to YYYY-MM, e.g. `2026-02`. Strongly recommended. |
+| `--dry-run` | off | Print summary, don't write output file. |
+| `--no-api` | off | Rules-only mode — unmatched transactions → `needs_review`. |
+| `--model` | `claude-sonnet-4-5` | Claude model for ambiguous transactions. |
+| `--api-key` | env `ANTHROPIC_API_KEY` | Anthropic API key. |
+| `-v` / `--verbose` | off | Detailed progress output. |
 
 ---
 
-## Output CSV Columns
+## Output CSV columns
 
 | Column | Description |
 |---|---|
@@ -113,15 +132,15 @@ python classify.py \
 | `vendor` | Extracted payee/vendor name |
 | `buchungstext` | Full bank statement text |
 | `amount_eur` | Amount in EUR (negative = debit) |
-| `order_id` | Amazon order ID if found |
-| `product_names` | Pipe-separated Amazon product names |
-| `classification` | See classifications below |
-| `category` | See categories below |
-| `confidence` | 0.0–1.0 confidence score |
+| `order_id` | Amazon order ID if found in Buchungstext |
+| `product_names` | Pipe-separated Amazon product names (if matched) |
+| `classification` | See below |
+| `category` | See below |
+| `confidence` | 0.0–1.0 |
 | `reason` | Short explanation |
-| `needs_receipt` | True if receipt required for tax |
-| `flag_note` | Note for accountant (German) |
-| `matched_rule` | Which deterministic rule matched (if any) |
+| `needs_receipt` | `True` if a receipt is required for tax purposes |
+| `flag_note` | Note for the accountant (German) |
+| `matched_rule` | Which deterministic rule matched (empty = API result) |
 
 ---
 
@@ -131,12 +150,12 @@ python classify.py \
 |---|---|
 | `cafe_expense` | Café business expense |
 | `personal` | Private/personal expense |
-| `transfer` | Internal money movement |
-| `salary` | Salary income from Capgemini |
-| `needs_review` | Ambiguous — owner must verify |
+| `transfer` | Internal money movement (no P&L impact) |
+| `salary` | Salary income (Capgemini) |
+| `needs_review` | Ambiguous — owner must verify manually |
 | `ignore` | Bank fees, internal settlements |
 
-## Expense Categories
+## Expense categories
 
 | Category | Description |
 |---|---|
@@ -153,61 +172,30 @@ python classify.py \
 
 ---
 
-## Input CSV Formats
-
-### Comdirect Bank CSV
-
-- Encoding: **ISO-8859-1**
-- Separator: **semicolon (`;`)**
-- Skip first **4 rows** (account info header)
-- Date column: `Buchungstag` (DD.MM.YYYY format)
-- Columns: `Buchungstag`, `Wertstellung`, `Vorgang`, `Buchungstext`, `Umsatz in EUR`
-- Amounts: German decimal format (`1.234,56` = 1234.56 EUR)
-
-### Amazon Order History CSV
-
-- Encoding: **UTF-8**
-- Standard Amazon order export columns:
-  `Order ID`, `Order Date`, `Product Name`, `Unit Price`, `Total Amount`, `Shipping Address`
-
----
-
 ## Architecture
 
 ```
-classify.py       ← CLI entry point, orchestration
-rules.py          ← Deterministic classification rules (~30 rules)
-amazon.py         ← Amazon CSV parser + order ID extractor
-api_client.py     ← Claude API batching (batches of 20)
+classify.py       ← CLI entry point, orchestration, path resolution
+rules.py          ← ~35 deterministic rules (no API call needed)
+amazon.py         ← Amazon CSV parser + order ID regex extractor
+api_client.py     ← Claude API batching (20 transactions per call)
 output.py         ← CSV writer + summary printer
-requirements.txt
-README.md
 ```
 
-### Processing Pipeline
+### Processing pipeline
 
-1. Parse bank CSV → list of transaction dicts
-2. Load Amazon CSV → `{order_id: [product_names]}` lookup dict
-3. Enrich Amazon transactions with product names
-4. Apply deterministic rules → classify most transactions immediately
-5. Collect unclassified transactions → batch send to Claude API (20 per call)
-6. Merge rule results + API results
-7. Write output CSV + print summary
-
----
-
-## Amazon Order ID Extraction
-
-Amazon order IDs embedded in Comdirect Buchungstext are extracted with a regex
-that handles:
-- Standard formats: `028-XXXXXXX-XXXXXXX`, `305-XXXXXXX-XXXXXXX`
-- Prefix variants: `028`, `302`, `304`, `305`, `306`
-- Space-split IDs (bank text wrapping)
-- Both `AMAZON EU S.A R.L.` and `AMAZON PAYMENTS EUROPE S.C.A.` transaction types
+1. Resolve `--bank` / `--amazon` directory args → concrete file paths
+2. Parse bank CSV → list of transaction dicts
+3. Load Amazon CSV → `{order_id: [product_names]}` lookup dict
+4. Enrich Amazon transactions with product names
+5. Apply deterministic rules → classify most transactions immediately
+6. Collect unclassified transactions → batch send to Claude API (20 per call)
+7. Merge rule results + API results
+8. Write `data/output/classified_{month}.csv` + print summary
 
 ---
 
-## Deterministic Rules Reference
+## Deterministic rules reference
 
 | Pattern | Classification | Category | Confidence |
 |---|---|---|---|
@@ -250,11 +238,10 @@ that handles:
 
 ---
 
-## Notes for Accountant
+## Notes for the accountant
 
 - Transactions with `needs_receipt=True` require physical or digital receipts
 - Transactions with `confidence < 0.7` are automatically flagged for review
-- `flag_note` column contains German-language notes for the accountant
-- All amounts are in EUR (float). Supabase import step converts to integer cents.
-- The `--month` filter does not exclude transactions dated outside the month from
-  being parsed — it strictly filters on `Buchungstag` date.
+- `flag_note` contains German-language notes explaining what to check
+- All amounts are in EUR (float). The Supabase import step converts to integer cents.
+- Amazon order ID extraction handles IDs split across bank text lines with spaces
