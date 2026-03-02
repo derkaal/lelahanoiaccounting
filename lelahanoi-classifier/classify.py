@@ -30,6 +30,10 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from amazon import extract_order_id, load_amazon_orders
 from api_client import classify_transactions
@@ -41,67 +45,157 @@ from rules import RuleResult, apply_rules
 # Directory auto-detection helpers
 # ---------------------------------------------------------------------------
 
-def resolve_bank_path(bank_arg: str, month: Optional[str]) -> str:
+def check_ready2order_folder(month: str) -> None:
     """
-    If --bank points to a directory, find the CSV inside it that matches
-    the month pattern (e.g. *2026-02* or *202602*).  Falls back to the
-    single CSV in the directory if there is only one.
+    Check if ready2order folder exists for the given month and log a warning
+    if no files are found. This is for future r2o_parser.py module integration.
+    """
+    r2o_path = Path(f"data/{month}/ready2order")
+    if not r2o_path.exists():
+        print(f"  Note: ready2order folder not found at {r2o_path} (will be used by future r2o_parser.py)")
+        return
+    
+    # Check for PDF files (ready2order reports are typically PDFs)
+    pdf_files = list(r2o_path.glob("*.pdf"))
+    if not pdf_files:
+        print(f"  Warning: ready2order folder exists but contains no PDF files at {r2o_path}")
+    else:
+        print(f"  Found {len(pdf_files)} ready2order report(s) in {r2o_path} (for future processing)")
 
+
+def resolve_bank_path(bank_arg: Optional[str], month: Optional[str]) -> str:
+    """
+    Resolve bank CSV path with month-based auto-detection.
+    
+    Priority:
+    1. If --bank is explicitly provided, use it (can be file or directory)
+    2. If --month is provided, auto-detect from data/{month}/bank/
+    3. Fall back to data/bank/ directory
+    
     Returns the resolved file path as a string.
     """
-    p = Path(bank_arg)
-    if p.is_file():
-        return str(p)
-    if not p.is_dir():
-        raise FileNotFoundError(f"Bank path not found: {bank_arg}")
-
-    candidates = sorted(p.glob("*.csv"))
-    if not candidates:
-        raise FileNotFoundError(f"No CSV files found in bank directory: {p}")
-
+    # If explicit bank path provided, use it
+    if bank_arg:
+        p = Path(bank_arg)
+        if p.is_file():
+            return str(p)
+        if not p.is_dir():
+            raise FileNotFoundError(f"Bank path not found: {bank_arg}")
+        
+        # Directory provided - find CSV inside
+        candidates = sorted(p.glob("*.csv"))
+        if not candidates:
+            raise FileNotFoundError(f"No CSV files found in bank directory: {p}")
+        
+        if month:
+            # Try both YYYY-MM and YYYYMM variants in the filename
+            month_compact = month.replace("-", "")
+            matches = [f for f in candidates if month in f.name or month_compact in f.name]
+            if len(matches) == 1:
+                return str(matches[0])
+            if len(matches) > 1:
+                raise ValueError(
+                    f"Multiple bank CSVs match month {month} in {p}: "
+                    + ", ".join(f.name for f in matches)
+                    + " — please pass an explicit --bank path."
+                )
+        
+        # No month filter or no match - use first CSV if only one exists
+        if len(candidates) == 1:
+            if month:
+                print(f"  Warning: no filename match for {month}; using {candidates[0].name}")
+            return str(candidates[0])
+        
+        raise ValueError(
+            f"Multiple CSVs in {p} and no --month given to disambiguate: "
+            + ", ".join(f.name for f in candidates)
+        )
+    
+    # No explicit bank path - use month-based auto-detection
     if month:
-        # Try both YYYY-MM and YYYYMM variants in the filename
+        month_bank_dir = Path(f"data/{month}/bank")
+        if not month_bank_dir.exists():
+            raise FileNotFoundError(
+                f"Month-based bank directory not found: {month_bank_dir}\n"
+                f"Please create the directory structure: data/{month}/bank/"
+            )
+        
+        candidates = sorted(month_bank_dir.glob("*.csv"))
+        if not candidates:
+            raise FileNotFoundError(
+                f"No bank CSV files found in {month_bank_dir}\n"
+                f"Please place your Comdirect CSV export in data/{month}/bank/"
+            )
+        
+        if len(candidates) == 1:
+            print(f"Auto-detected bank CSV: {candidates[0]}")
+            return str(candidates[0])
+        
+        # Multiple CSVs - try to match by filename
         month_compact = month.replace("-", "")
         matches = [f for f in candidates if month in f.name or month_compact in f.name]
         if len(matches) == 1:
+            print(f"Auto-detected bank CSV: {matches[0]}")
             return str(matches[0])
-        if len(matches) > 1:
-            raise ValueError(
-                f"Multiple bank CSVs match month {month} in {p}: "
-                + ", ".join(f.name for f in matches)
-                + " — please pass an explicit --bank path."
-            )
-        # No filename match — if there's only one CSV, use it
-        if len(candidates) == 1:
-            print(f"  Warning: no filename match for {month}; using {candidates[0].name}")
-            return str(candidates[0])
-        raise FileNotFoundError(
-            f"No bank CSV matching '{month}' found in {p}. "
-            f"Available: {[f.name for f in candidates]}"
+        
+        raise ValueError(
+            f"Multiple bank CSVs found in {month_bank_dir}: "
+            + ", ".join(f.name for f in candidates)
+            + "\nPlease specify which one to use with --bank"
         )
-
-    if len(candidates) == 1:
-        return str(candidates[0])
+    
+    # No month and no explicit path - error
     raise ValueError(
-        f"Multiple CSVs in {p} and no --month given to disambiguate: "
-        + ", ".join(f.name for f in candidates)
+        "Either --month or --bank must be provided.\n"
+        "Usage: python classify.py --month 2026-02"
     )
 
 
-def resolve_amazon_path(amazon_arg: Optional[str]) -> Optional[str]:
+def resolve_amazon_path(amazon_arg: Optional[str], month: Optional[str]) -> Optional[str]:
     """
-    If --amazon points to a directory, return the most recently modified CSV
-    inside it.  Returns None if no CSV is found (Amazon data is optional).
+    Resolve Amazon CSV path with month-based auto-detection.
+    
+    Priority:
+    1. If --amazon is explicitly provided, use it (can be file or directory)
+    2. If --month is provided, auto-detect from data/{month}/amazon/
+    3. Fall back to data/amazon/ directory
+    
+    Returns the resolved file path or None (Amazon data is optional).
     """
-    if amazon_arg is None:
+    # If explicit amazon path provided, use it
+    if amazon_arg:
+        p = Path(amazon_arg)
+        if p.is_file():
+            return str(p)
+        if not p.is_dir():
+            return None  # directory doesn't exist - Amazon data is optional
+        
+        candidates = sorted(p.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not candidates:
+            return None
+        return str(candidates[0])
+    
+    # No explicit amazon path - use month-based auto-detection
+    if month:
+        month_amazon_dir = Path(f"data/{month}/amazon")
+        if not month_amazon_dir.exists():
+            print(f"  Note: Amazon folder not found at {month_amazon_dir} (optional)")
+            return None
+        
+        candidates = sorted(month_amazon_dir.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not candidates:
+            print(f"  Note: No Amazon CSV found in {month_amazon_dir} (optional)")
+            return None
+        
+        print(f"Auto-detected Amazon CSV: {candidates[0]}")
+        return str(candidates[0])
+    
+    # No month - try default data/amazon/ directory
+    default_amazon_dir = Path("data/amazon")
+    if not default_amazon_dir.exists():
         return None
-    p = Path(amazon_arg)
-    if p.is_file():
-        return str(p)
-    if not p.is_dir():
-        return None  # directory doesn't exist yet — Amazon data is optional
-
-    candidates = sorted(p.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
+    
+    candidates = sorted(default_amazon_dir.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
     if not candidates:
         return None
     return str(candidates[0])
@@ -443,36 +537,38 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "--bank",
-        default="data/bank",
+        "--month",
+        required=False,
         help=(
-            "Path to Comdirect CSV file or directory. "
-            "If a directory is given, the file matching *{month}* is used. "
-            "(default: data/bank/)"
+            "Month to process in YYYY-MM format (e.g. 2026-02). "
+            "Auto-detects files from data/YYYY-MM/ folder structure. "
+            "Required unless --bank is explicitly provided."
+        ),
+    )
+    parser.add_argument(
+        "--bank",
+        default=None,
+        help=(
+            "Override: Path to Comdirect CSV file or directory. "
+            "If not provided, auto-detects from data/{month}/bank/"
         ),
     )
     parser.add_argument(
         "--amazon",
-        default="data/amazon",
+        default=None,
         help=(
-            "Path to Amazon Order History CSV file or directory. "
-            "If a directory is given, the most recently modified CSV is used. "
-            "(default: data/amazon/)"
+            "Override: Path to Amazon Order History CSV or directory. "
+            "If not provided, auto-detects from data/{month}/amazon/ "
+            "(optional)"
         ),
     )
     parser.add_argument(
         "--output",
         default=None,
         help=(
-            "Output CSV path. "
-            "Defaults to data/output/classified_{month}.csv "
-            "(or data/output/classified_output.csv if --month not set)."
+            "Override: Output CSV path. "
+            "Defaults to data/{month}/output/classified_{month}.csv"
         ),
-    )
-    parser.add_argument(
-        "--month",
-        default=None,
-        help="Filter to a specific month, e.g. 2026-02",
     )
     parser.add_argument(
         "--dry-run",
@@ -514,13 +610,23 @@ def main() -> None:
     except (FileNotFoundError, ValueError) as e:
         parser.error(str(e))
 
-    amazon_path = resolve_amazon_path(args.amazon)
+    amazon_path = resolve_amazon_path(args.amazon, args.month)
+
+    # Check ready2order folder if month is specified
+    if args.month:
+        check_ready2order_folder(args.month)
 
     # Build default output path when not explicitly set
     output_path = args.output
     if output_path is None:
-        suffix = args.month if args.month else "output"
-        output_path = f"data/output/classified_{suffix}.csv"
+        if args.month:
+            # Month-based output path
+            output_dir = Path(f"data/{args.month}/output")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = f"data/{args.month}/output/classified_{args.month}.csv"
+        else:
+            # Fallback to old structure
+            output_path = "data/output/classified_output.csv"
 
     # If --no-api, monkey-patch api_client to skip calls
     if args.no_api:
