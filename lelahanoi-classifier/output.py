@@ -6,7 +6,6 @@ Writes the classified transactions to a CSV and prints a summary to stdout.
 
 import csv
 from pathlib import Path
-from typing import Optional
 
 
 OUTPUT_COLUMNS = [
@@ -26,8 +25,73 @@ OUTPUT_COLUMNS = [
 ]
 
 
+def _format_european_number(value: float) -> str:
+    """
+    Format a float as a European-style number string.
+    
+    Converts: 1234.56 → "1.234,56"
+              -45.0 → "-45,00"
+    
+    Uses period as thousand separator and comma as decimal separator.
+    """
+    if value == 0.0:
+        return "0,00"
+    
+    # Handle negative numbers
+    is_negative = value < 0
+    abs_value = abs(value)
+    
+    # Format with 2 decimal places
+    formatted = f"{abs_value:,.2f}"
+    
+    # Replace comma (thousand sep) with temp marker
+    # Replace period (decimal sep) with comma
+    # Replace temp marker with period
+    formatted = formatted.replace(",", "TEMP")
+    formatted = formatted.replace(".", ",")
+    formatted = formatted.replace("TEMP", ".")
+    
+    if is_negative:
+        formatted = "-" + formatted
+    
+    return formatted
+
+
+def _format_row_for_european_csv(row: dict) -> dict:
+    """
+    Format numeric fields in a row for European CSV output.
+    
+    Converts float values to European number format strings
+    (comma as decimal separator).
+    """
+    formatted_row = row.copy()
+    
+    # Format amount_eur field
+    if "amount_eur" in formatted_row:
+        amount = formatted_row["amount_eur"]
+        if isinstance(amount, (int, float)):
+            formatted_row["amount_eur"] = _format_european_number(
+                float(amount)
+            )
+    
+    # Format confidence field
+    if "confidence" in formatted_row:
+        conf = formatted_row["confidence"]
+        if isinstance(conf, (int, float)):
+            formatted_row["confidence"] = _format_european_number(
+                float(conf)
+            )
+    
+    return formatted_row
+
+
 def write_output_csv(rows: list[dict], output_path: str) -> None:
-    """Write classified transactions to a CSV file."""
+    """
+    Write classified transactions to a CSV file.
+    
+    Uses semicolon (;) as field separator for European CSV compatibility,
+    where commas are used as decimal separators in numbers.
+    """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -36,6 +100,7 @@ def write_output_csv(rows: list[dict], output_path: str) -> None:
             f,
             fieldnames=OUTPUT_COLUMNS,
             extrasaction="ignore",
+            delimiter=";",  # Use semicolon for European CSV format
         )
         writer.writeheader()
         for row in rows:
@@ -43,6 +108,10 @@ def write_output_csv(rows: list[dict], output_path: str) -> None:
             products = row.get("product_names")
             if isinstance(products, list):
                 row = {**row, "product_names": " | ".join(products)}
+            
+            # Format numeric fields in European format (comma as decimal separator)
+            row = _format_row_for_european_csv(row)
+            
             writer.writerow(row)
 
     print(f"\nOutput written to: {path}")

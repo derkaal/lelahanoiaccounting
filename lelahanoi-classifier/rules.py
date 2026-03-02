@@ -142,6 +142,12 @@ def apply_rules(
     # ------------------------------------------------------------------
     # FOOD / WARENEINKAUF
     # ------------------------------------------------------------------
+    # Plastic cups, straws, and café inventory items (not office supplies)
+    if _contains(b, "STROHHALM") or _contains(b, "PLASTIKBECHER") or _contains(b, "BECHER") or \
+       _contains(b, "CUPS") or _contains(b, "STRAWS") or _contains(b, "EUPAKO"):
+        return RuleResult("cafe_expense", "exp_wareneinkauf", 1.0,
+                         matched_rule="Plastic cups/straws/café inventory")
+
     if _contains(v, "TAFELMAIER") or _contains(b, "TAFELMAIER"):
         return RuleResult("cafe_expense", "exp_wareneinkauf", 1.0, matched_rule="Baeckerei Johann Tafelmaier")
 
@@ -211,6 +217,19 @@ def apply_rules(
 
     if _contains(v, "GEMEINDE BUCH") or _contains(b, "GEMEINDE BUCH AM ERLBACH"):
         return RuleResult("personal", "personal", 1.0, matched_rule="Gemeinde Buch am Erlbach")
+
+    # Fuel station
+    if _contains(v, "SENFTL") or _contains(b, "SENFTL"):
+        return RuleResult("personal", "personal", 1.0, matched_rule="SENFTL GmbH (fuel)")
+
+    # Clothing/fashion retailer (non-PayPal transactions)
+    if _contains(v, "BEST SECRET") or _contains(b, "BEST SECRET") or \
+       _contains(v, "BESTSECRET") or _contains(b, "BESTSECRET"):
+        return RuleResult("personal", "personal", 1.0, matched_rule="Best Secret")
+
+    # Parking fees
+    if _contains(v, "EASYPARK") or _contains(b, "EASYPARK"):
+        return RuleResult("personal", "personal", 1.0, matched_rule="EasyPark")
 
     # ------------------------------------------------------------------
     # TRANSFERS
