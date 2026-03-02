@@ -376,6 +376,164 @@ def _extract_vendor(buchungstext: str, vorgang: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Comdirect Visa / credit card CSV parser
+# ---------------------------------------------------------------------------
+
+def parse_credit_csv(
+    csv_path: str,
+    month_filter: Optional[str] = None,
+) -> list[dict]:
+    """
+    Parse Comdirect Visa/credit card CSV export.
+
+    Format differences from Girokonto:
+    - Additional "Umsatztag" column (actual transaction date vs booking date)
+    - "Referenz" column (merchant reference code, not used for classification)
+    - "Buchungstext" contains the merchant name directly — no Auftraggeber:/Empfänger: prefix
+    - "Vorgang" is typically "Visa-Umsatz" for purchases, "Kreditkartenabrechnung" for settlements
+    - Skip rows: same 4 header rows as Girokonto
+    - Encoding: ISO-8859-1 (same as Girokonto)
+    - Amount sign: negative = purchase/charge, positive = payment/refund (consistent with Girokonto)
+
+    Returns list of transaction dicts with the same keys as parse_bank_csv(),
+    plus source="credit".
+    """
+    path = Path(csv_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Credit card CSV not found: {csv_path}")
+
+    try:
+        df = pd.read_csv(
+            csv_path,
+            encoding="iso-8859-1",
+            sep=";",
+            skiprows=4,
+            dtype=str,
+        )
+    except Exception as e:
+        raise ValueError(f"Failed to parse credit card CSV: {e}") from e
+
+    df.columns = [c.strip().strip('"') for c in df.columns]
+
+    def find_col(df, *candidates):
+        for cand in candidates:
+            for col in df.columns:
+                if cand.lower() in col.lower():
+                    return col
+        return None
+
+    col_date = find_col(df, "Buchungstag", "Datum", "Date")
+    col_text = find_col(df, "Buchungstext", "Verwendungszweck", "Text")
+    col_vorgang = find_col(df, "Vorgang", "Buchungsart", "Art")
+    col_amount = find_col(df, "Umsatz", "Betrag", "Amount")
+
+    missing = []
+    if not col_date:
+        missing.append("Buchungstag")
+    if not col_text:
+        missing.append("Buchungstext")
+    if not col_amount:
+        missing.append("Umsatz in EUR")
+    if missing:
+        raise ValueError(
+            f"Credit card CSV missing required columns: {missing}. "
+            f"Found: {list(df.columns)}"
+        )
+
+    transactions = []
+    for _, row in df.iterrows():
+        date_raw = str(row.get(col_date, "")).strip().strip('"')
+        buchungstext = str(row.get(col_text, "")).strip().strip('"')
+        vorgang = str(row.get(col_vorgang, "")).strip().strip('"') if col_vorgang else ""
+        amount_raw = str(row.get(col_amount, "")).strip().strip('"')
+
+        # Skip empty rows and trailing metadata Comdirect appends
+        if not date_raw or date_raw.lower() in ("nan", "", "buchungstag"):
+            continue
+        # Skip the periodic balance settlement row (Kreditkartenabrechnung) —
+        # it's a transfer between the credit card and the Girokonto, not an expense
+        if "kreditkartenabrechnung" in vorgang.lower():
+            continue
+
+        try:
+            date_parsed = pd.to_datetime(date_raw, dayfirst=True).strftime("%Y-%m-%d")
+        except Exception:
+            date_parsed = date_raw
+
+        if month_filter:
+            year, mo = month_filter.split("-")
+            if not date_parsed.startswith(f"{year}-{mo}"):
+                continue
+
+        amount = _parse_german_amount(amount_raw)
+
+        # For credit card, Buchungstext is already the merchant name
+        vendor = _extract_credit_vendor(buchungstext, vorgang)
+        order_id = extract_order_id(buchungstext)
+
+        transactions.append({
+            "source": "credit",
+            "date": date_parsed,
+            "vendor": vendor,
+            "buchungstext": buchungstext,
+            "amount_eur": amount,
+            "raw_vorgang": vorgang,
+            "order_id": order_id or "",
+        })
+
+    return transactions
+
+
+def _extract_credit_vendor(buchungstext: str, vorgang: str) -> str:
+    """
+    Extract vendor name from a credit card Buchungstext.
+
+    Unlike the Girokonto, credit card Buchungstext usually starts directly
+    with the merchant name (e.g. "REWE SAGT DANKE" or "AMAZON.DE").
+    Strip trailing date/reference noise.
+    """
+    text = buchungstext.strip()
+    # Remove trailing date patterns (e.g. "15.02.26", "15.02.2026")
+    text = re.sub(r'\s+\d{2}\.\d{2}\.\d{2,4}.*$', '', text)
+    # Remove trailing slash-separated location info common in card receipts
+    text = re.sub(r'\s*/\s*\w+.*$', '', text)
+    return text[:80].strip()
+
+
+def resolve_credit_path(credit_arg: Optional[str], month: Optional[str]) -> Optional[str]:
+    """
+    Resolve credit card CSV path with month-based auto-detection.
+
+    Priority:
+    1. If --credit is explicitly provided, use it (file or directory)
+    2. If --month is provided, auto-detect from data/{month}/credit/
+    3. If nothing found, return None (credit card data is optional)
+    """
+    if credit_arg:
+        p = Path(credit_arg)
+        if p.is_file():
+            return str(p)
+        if not p.is_dir():
+            return None
+        candidates = sorted(p.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
+        return str(candidates[0]) if candidates else None
+
+    if month:
+        credit_dir = Path(f"data/{month}/credit")
+        if not credit_dir.exists():
+            print(f"  Note: Credit card folder not found at {credit_dir} (optional)")
+            return None
+        candidates = sorted(credit_dir.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not candidates:
+            print(f"  Note: No credit card CSV found in {credit_dir} (optional)")
+            return None
+        print(f"Auto-detected credit card CSV: {candidates[0]}")
+        return str(candidates[0])
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Main classification pipeline
 # ---------------------------------------------------------------------------
 
@@ -384,6 +542,7 @@ def classify_all(
     amazon_path: Optional[str],
     output_path: Optional[str],
     month_filter: Optional[str],
+    credit_path: Optional[str] = None,
     dry_run: bool = False,
     model: str = "claude-sonnet-4-5",
     api_key: Optional[str] = None,
@@ -391,7 +550,7 @@ def classify_all(
 ) -> list[dict]:
     """
     Full classification pipeline:
-    1. Parse bank CSV
+    1. Parse bank CSV (and optionally credit card CSV)
     2. Load Amazon orders (if provided)
     3. Enrich Amazon transactions with product names
     4. Apply deterministic rules
@@ -400,15 +559,29 @@ def classify_all(
     7. Write output / print summary
     """
     # ------------------------------------------------------------------
-    # Step 1: Parse bank CSV
+    # Step 1: Parse bank CSV (and optionally credit card CSV)
     # ------------------------------------------------------------------
     print(f"Parsing bank CSV: {bank_path}")
-    transactions = parse_bank_csv(bank_path, month_filter=month_filter)
-    print(f"  {len(transactions)} transactions loaded")
+    bank_transactions = parse_bank_csv(bank_path, month_filter=month_filter)
+    for tx in bank_transactions:
+        tx.setdefault("source", "bank")
+    print(f"  {len(bank_transactions)} bank transactions loaded")
+
+    credit_transactions: list[dict] = []
+    if credit_path:
+        print(f"Parsing credit card CSV: {credit_path}")
+        credit_transactions = parse_credit_csv(credit_path, month_filter=month_filter)
+        print(f"  {len(credit_transactions)} credit card transactions loaded")
+
+    transactions = bank_transactions + credit_transactions
+    # Sort combined list by date so the output is chronological
+    transactions.sort(key=lambda t: t.get("date", ""))
 
     if not transactions:
         print("No transactions found. Check --month filter or CSV format.")
         return []
+
+    print(f"  {len(transactions)} transactions total ({len(bank_transactions)} bank, {len(credit_transactions)} credit)")
 
     # ------------------------------------------------------------------
     # Step 2: Load Amazon orders
@@ -563,6 +736,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--credit",
+        default=None,
+        help=(
+            "Override: Path to Comdirect Visa/credit card CSV or directory. "
+            "If not provided, auto-detects from data/{month}/credit/ "
+            "(optional)"
+        ),
+    )
+    parser.add_argument(
         "--output",
         default=None,
         help=(
@@ -611,6 +793,7 @@ def main() -> None:
         parser.error(str(e))
 
     amazon_path = resolve_amazon_path(args.amazon, args.month)
+    credit_path = resolve_credit_path(args.credit, args.month)
 
     # Check ready2order folder if month is specified
     if args.month:
@@ -651,6 +834,7 @@ def main() -> None:
             amazon_path=amazon_path,
             output_path=output_path,
             month_filter=args.month,
+            credit_path=credit_path,
             dry_run=args.dry_run,
             model=args.model,
             api_key=args.api_key,

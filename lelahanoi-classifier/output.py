@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 OUTPUT_COLUMNS = [
+    "source",
     "date",
     "vendor",
     "buchungstext",
@@ -247,6 +248,7 @@ def format_rows_for_output(
     rows = []
     for tx, cl in zip(transactions, classifications):
         row = {
+            "source": tx.get("source", "bank"),
             "date": tx.get("date", ""),
             "vendor": tx.get("vendor", ""),
             "buchungstext": tx.get("buchungstext", ""),

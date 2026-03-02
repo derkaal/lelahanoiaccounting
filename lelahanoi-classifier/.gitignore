@@ -1,15 +1,13 @@
 # Data files — never commit real financial data
 data/**/bank/*.csv
 data/**/amazon/*.csv
-data/**/output/*.csv
-data/**/ready2order/*.pdf
-data/invoices/**/*.pdf
-data/**/bank/*.csv
-data/**/amazon/*.csv
+data/**/credit/*.csv
 data/**/output/*.csv
 data/**/output/*.html
+data/**/ready2order/*.pdf
 data/**/invoices/**/*.pdf
 data/**/invoices/**/*.PDF
+data/invoices/**/*.pdf
 
 # Keep folder structure
 !data/**/.gitkeep

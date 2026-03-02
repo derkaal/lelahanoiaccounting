@@ -25,7 +25,9 @@ lelahanoi-classifier/
 │
 └── data/                # ← gitignored; never committed to GitHub
     └── 2026-02/         # One folder per month
-        ├── bank/        # Comdirect CSV export for this month
+        ├── bank/        # Comdirect Girokonto CSV export for this month
+        │   └── .gitkeep
+        ├── credit/      # Comdirect Visa/credit card CSV export for this month
         │   └── .gitkeep
         ├── amazon/      # Amazon Order History CSV for this month
         │   └── .gitkeep
@@ -62,18 +64,25 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 Each month gets its own folder under `data/`. For February 2026:
 
-1. **Bank statement** — Export your Comdirect account as CSV:
-   - In the Comdirect app/website: Konto → Umsätze → Export → CSV
-   - Save it to `data/2026-02/bank/`, e.g. `data/2026-02/bank/umsaetze_2026-02.csv`
-   - The filename should contain the month (`2026-02` or `202602`) so
-     the tool can find it automatically.
+1. **Bank statement (Girokonto)** — Export from Comdirect as CSV:
+   - Konto → Umsätze → Export → CSV
+   - Save to `data/2026-02/bank/`, e.g. `data/2026-02/bank/umsaetze_2026-02.csv`
+   - The filename should contain the month (`2026-02` or `202602`) for auto-detection.
 
-2. **Amazon orders** (optional but recommended) — Export your order history:
+2. **Credit card (Visa)** *(optional but recommended)* — Export from Comdirect as CSV:
+   - Kreditkarte → Umsätze → Export → CSV
+   - Save to `data/2026-02/credit/`, e.g. `data/2026-02/credit/kreditkarte_2026-02.csv`
+   - The classifier merges these with bank transactions in one combined output.
+   - Each row in the output has a `source` column (`bank` or `credit`) for filtering.
+   - **Note:** The periodic settlement charge ("Kreditkartenabrechnung") is automatically
+     skipped since it's already covered by the matching bank debit.
+
+4. **Amazon orders** (optional but recommended) — Export your order history:
    - Go to [amazon.de/gp/b2b/reports](https://www.amazon.de/gp/b2b/reports)
      or use the "Order History Reports" page
    - Save it to `data/2026-02/amazon/`, e.g. `data/2026-02/amazon/Order_History.csv`
 
-3. **Invoices** — Store PDFs in `data/2026-02/invoices/` after running the classifier.
+5. **Invoices** — Store PDFs in `data/2026-02/invoices/` after running the classifier.
    See the [Receipt management](#receipt-management) section below for naming conventions.
 
 ---
@@ -122,9 +131,13 @@ python classify.py --month 2026-02
 
 This will:
 - Find `data/2026-02/bank/*.csv` (auto-detected)
+- Find `data/2026-02/credit/*.csv` if present (optional — credit card)
 - Find the most recently modified CSV in `data/2026-02/amazon/` (optional)
+- Merge bank + credit card transactions into one chronological list
 - Write output to `data/2026-02/output/classified_2026-02.csv` (semicolon-delimited)
 - Print a summary to the terminal
+
+The output has a `source` column (`bank` or `credit`) so you can filter by account in Excel/Numbers.
 
 ### Dry run — summary only, no file written
 
@@ -137,6 +150,7 @@ python classify.py --month 2026-02 --dry-run
 ```bash
 python classify.py \
   --bank data/2026-02/bank/umsaetze_feb2026.csv \
+  --credit data/2026-02/credit/kreditkarte_2026-02.csv \
   --amazon data/2026-02/amazon/Order_History.csv \
   --output data/2026-02/output/classified_2026-02.csv \
   --month 2026-02
