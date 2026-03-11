@@ -393,7 +393,8 @@ def parse_credit_csv(
     - "Vorgang" is typically "Visa-Umsatz" for purchases, "Kreditkartenabrechnung" for settlements
     - Skip rows: same 4 header rows as Girokonto
     - Encoding: ISO-8859-1 (same as Girokonto)
-    - Amount sign: negative = purchase/charge, positive = payment/refund (consistent with Girokonto)
+    - Amount sign in raw CSV: positive = purchase/charge, negative = refund/payment
+      (opposite of Girokonto — negated during parsing to make purchases negative)
 
     Returns list of transaction dicts with the same keys as parse_bank_csv(),
     plus source="credit".
@@ -465,7 +466,9 @@ def parse_credit_csv(
             if not date_parsed.startswith(f"{year}-{mo}"):
                 continue
 
-        amount = _parse_german_amount(amount_raw)
+        # Comdirect Visa CSV exports purchases as positive (amount charged to card).
+        # Negate so purchases are negative, consistent with the Girokonto convention.
+        amount = -_parse_german_amount(amount_raw)
 
         # For credit card, Buchungstext is already the merchant name
         vendor = _extract_credit_vendor(buchungstext, vorgang)
