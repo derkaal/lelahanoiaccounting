@@ -426,7 +426,10 @@ def parse_credit_csv(
     col_date = find_col(df, "Buchungstag", "Datum", "Date")
     col_text = find_col(df, "Buchungstext", "Verwendungszweck", "Text")
     col_vorgang = find_col(df, "Vorgang", "Buchungsart", "Art")
-    col_amount = find_col(df, "Umsatz", "Betrag", "Amount")
+    # "Umsatz in" matches "Umsatz in EUR" but NOT "Umsatztag" (the transaction-date
+    # column Comdirect puts earlier in the file, which would otherwise be picked up
+    # first by a plain "Umsatz" substring match).
+    col_amount = find_col(df, "Umsatz in", "Betrag", "Amount")
 
     missing = []
     if not col_date:
