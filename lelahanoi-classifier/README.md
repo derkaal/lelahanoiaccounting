@@ -14,30 +14,35 @@ system.
 
 ```
 lelahanoi-classifier/
-├── classify.py          # Main CLI
-├── check_receipts.py    # Receipt checker and HTML report generator
-├── rules.py             # Deterministic classification rules
-├── amazon.py            # Amazon CSV parser + order ID extractor
-├── api_client.py        # Claude API batch classifier
-├── output.py            # CSV writer + summary printer (semicolon-delimited)
+├── classify.py           # Step 1 — classify bank + credit card transactions
+├── process_receipts.py   # Step 2 — extract PDF receipts, match, EÜR report
+├── check_receipts.py     # Alternative: filename-based receipt checker
+├── rules.py              # Deterministic classification rules
+├── amazon.py             # Amazon CSV parser + order ID extractor
+├── api_client.py         # Claude API batch classifier
+├── output.py             # CSV writer + summary printer (semicolon-delimited)
 ├── requirements.txt
 ├── README.md
 │
-└── data/                # ← gitignored; never committed to GitHub
-    └── 2026-02/         # One folder per month
-        ├── bank/        # Comdirect Girokonto CSV export for this month
+└── data/                 # ← gitignored; never committed to GitHub
+    ├── inbox/            # ← DROP ALL RECEIPT PDFs HERE
+    │   └── .gitkeep
+    └── 2026-02/          # One folder per month
+        ├── bank/         # Comdirect Girokonto CSV export for this month
         │   └── .gitkeep
-        ├── credit/      # Comdirect Visa/credit card CSV export for this month
+        ├── credit/       # Comdirect Visa/credit card CSV export for this month
         │   └── .gitkeep
-        ├── amazon/      # Amazon Order History CSV for this month
+        ├── amazon/       # Amazon Order History CSV for this month
         │   └── .gitkeep
-        ├── ready2order/ # ready2order reports (for future r2o_parser.py)
+        ├── ready2order/  # ready2order reports (for future r2o_parser.py)
         │   └── .gitkeep
-        ├── invoices/    # PDF receipts for this month
-        │   ├── amazon/      # Named by order ID: 028-XXXXXXX-XXXXXXX.pdf
-        │   ├── suppliers/   # Named: {vendor-slug}_{YYYY-MM-DD}.pdf
-        │   └── other/       # Everything else
-        └── output/      # Classified CSV and reports written here
+        ├── invoices/     # PDFs are moved here by process_receipts.py --apply
+        │   ├── accounted_for/     # Matched to a bank/credit transaction
+        │   ├── not_accounted_for/ # Cash payment or from a different month
+        │   ├── amazon/            # (optional, for manually named Amazon PDFs)
+        │   ├── suppliers/         # (optional, for manually named supplier PDFs)
+        │   └── other/             # Everything else
+        └── output/       # Classified CSV, HTML reports, EÜR CSV written here
             └── .gitkeep
 ```
 
@@ -84,6 +89,61 @@ Each month gets its own folder under `data/`. For February 2026:
 
 5. **Invoices** — Store PDFs in `data/2026-02/invoices/` after running the classifier.
    See the [Receipt management](#receipt-management) section below for naming conventions.
+
+---
+
+## Receipt processing (recommended workflow)
+
+`process_receipts.py` extracts tax data from PDFs using Claude AI (vision for
+scanned receipts, text for digital ones), matches them to classified bank/credit
+transactions, and produces a tax-ready EÜR summary.
+
+### Workflow
+
+```
+1. Scan / save ALL receipts → data/inbox/   (any filename, any month)
+
+2. Classify bank + credit statements:
+   python classify.py --month 2026-02
+
+3. Extract, match, review:
+   python process_receipts.py --month 2026-02 --report --eur-csv
+
+4. Check the HTML report, then apply file moves:
+   python process_receipts.py --month 2026-02 --apply
+```
+
+After `--apply`, receipts are sorted into:
+- `data/2026-02/invoices/accounted_for/`     — matched to a bank/credit transaction
+- `data/2026-02/invoices/not_accounted_for/` — cash payment or from a different month
+
+### What the report produces
+
+**Liste 1 — Belege mit Kontoauszug-Eintrag**
+Receipts with a matching bank/credit debit. Shows extracted vendor, date,
+gross amount, VAT breakdown (7% and 19% separately), and the matched transaction.
+
+**Liste 2 — Ausgaben ohne Beleg**
+`cafe_expense` transactions in the bank/credit CSV with no matching receipt found.
+
+**Liste 3 — Belege ohne Kontoauszug**
+Receipts not matched to any bank transaction — either cash payments (bar) or
+from a different month. Still included in the EÜR totals as valid expenses.
+
+**EÜR-Zusammenfassung**
+Per EÜR line (§ 4 EStG): count, Netto 7%, VorSt 7%, Netto 19%, VorSt 19%, Brutto.
+Exported as `data/{month}/output/eur_summary_{month}.csv` with `--eur-csv`.
+
+> **Matching rule:** amounts must match within ±€0.02. Date gaps between
+> receipt date and booking date are allowed. Cash receipts ("bar") that have
+> no bank match land in Liste 3 but are still included in the EÜR totals.
+
+### Requirements for PDF extraction
+
+- Depends on `pymupdf` (pure Python, no system dependencies needed)
+- Digital PDFs: text extracted directly (fast, no API call for text)
+- Scanned PDFs (thermal paper, photos): rendered at 150 DPI → Claude vision API
+- The `ANTHROPIC_API_KEY` env var must be set (same as `classify.py`)
 
 ---
 

@@ -1,4 +1,6 @@
 # Data files — never commit real financial data
+data/inbox/*.pdf
+data/inbox/*.PDF
 data/**/bank/*.csv
 data/**/amazon/*.csv
 data/**/credit/*.csv
