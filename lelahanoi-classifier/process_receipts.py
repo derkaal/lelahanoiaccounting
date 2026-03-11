@@ -201,6 +201,8 @@ def extract_receipt(pdf_path: Path, client: Anthropic, model: str) -> ReceiptDat
         raw = re.sub(r'^```(?:json)?\s*', '', raw)
         raw = re.sub(r'\s*```$', '', raw)
         data = json.loads(raw)
+        if isinstance(data, list):
+            data = data[0] if data else {}
     except json.JSONDecodeError as e:
         receipt.extraction_error = f"JSON-Parse-Fehler: {e}"
         return receipt
