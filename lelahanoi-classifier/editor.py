@@ -56,6 +56,23 @@ def csv_path(month: str) -> Path:
     return BASE_DIR / month / "output" / f"classified_{month}.csv"
 
 
+def _parse_amount(value: str) -> float:
+    """Parse a European-formatted amount string to float.
+    Handles both '2.400,00' (European) and '2400.00' (plain) formats.
+    """
+    v = value.strip()
+    if not v or v in ("nan", ""):
+        return 0.0
+    # European format: period as thousands sep, comma as decimal sep
+    # e.g. "2.400,00" → remove dots → "2400,00" → swap comma → "2400.00"
+    if "," in v:
+        v = v.replace(".", "").replace(",", ".")
+    try:
+        return float(v)
+    except ValueError:
+        return 0.0
+
+
 def load_csv(month: str) -> list[dict]:
     path = csv_path(month)
     if not path.exists():
@@ -65,8 +82,21 @@ def load_csv(month: str) -> list[dict]:
         reader = csv.DictReader(f, delimiter=";")
         for i, row in enumerate(reader):
             row["_id"] = i
+            # Normalise amount to a plain float string so JS parseFloat works
+            row["amount_eur"] = _parse_amount(row.get("amount_eur", "0"))
             rows.append(dict(row))
     return rows
+
+
+def _format_amount(value) -> str:
+    """Write amount back as European-formatted string, e.g. -2400.0 → '-2.400,00'."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    sign = "-" if n < 0 else ""
+    formatted = f"{abs(n):,.2f}".replace(",", "TSEP").replace(".", ",").replace("TSEP", ".")
+    return sign + formatted
 
 
 def save_csv(month: str, rows: list[dict]) -> None:
@@ -78,7 +108,9 @@ def save_csv(month: str, rows: list[dict]) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
         writer.writeheader()
         for row in rows:
-            writer.writerow({k: v for k, v in row.items() if k != "_id"})
+            out = {k: v for k, v in row.items() if k != "_id"}
+            out["amount_eur"] = _format_amount(out.get("amount_eur", 0))
+            writer.writerow(out)
 
 
 # ---------------------------------------------------------------------------
