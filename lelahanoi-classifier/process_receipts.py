@@ -490,7 +490,11 @@ def print_report(
 ) -> None:
     matched  = [mr for mr in match_results if mr.matched_tx is not None]
     orphans  = [mr for mr in match_results if mr.matched_tx is None and not mr.receipt.extraction_error]
-    errors   = [mr for mr in match_results if mr.receipt.extraction_error]
+    # Liste 4: extraction failures + low-confidence reads
+    unclear  = [
+        mr for mr in match_results
+        if mr.receipt.extraction_error or mr.receipt.confidence == "low"
+    ]
 
     total_matched = sum(abs(mr.receipt.total_gross) for mr in matched)
     total_unmatched_exp = sum(abs(e.get("amount_eur", 0)) for e in unmatched_expenses)
@@ -503,8 +507,7 @@ def print_report(
     print(f"  Belege abgeglichen (Liste 1):         {len(matched):>4}  ({total_matched:>10.2f} EUR)")
     print(f"  Ausgaben ohne Beleg (Liste 2):        {len(unmatched_expenses):>4}  ({total_unmatched_exp:>10.2f} EUR)")
     print(f"  Belege ohne Konto (Liste 3):          {len(orphans):>4}  ({total_orphan:>10.2f} EUR)")
-    if errors:
-        print(f"  Extraktionsfehler:                    {len(errors):>4}")
+    print(f"  Nicht lesbar / Prüfung (Liste 4):     {len(unclear):>4}")
     print()
 
     # LIST 1 — matched
@@ -550,11 +553,20 @@ def print_report(
                 print(f"             → {mr.notes}")
         print()
 
-    # Extraction errors
-    if errors:
-        print(f"  ── EXTRAKTIONSFEHLER ({len(errors)}) " + "─" * 40)
-        for mr in errors:
-            print(f"    {mr.receipt.pdf_path.name}: {mr.receipt.extraction_error}")
+    # LIST 4 — unreadable / low confidence
+    if unclear:
+        print(f"  ── LISTE 4: NICHT LESBAR / PRÜFUNG ERFORDERLICH ({len(unclear)}) " + "─" * 10)
+        print()
+        for mr in sorted(unclear, key=lambda x: x.receipt.pdf_path.name):
+            if mr.receipt.extraction_error:
+                reason = f"Fehler: {mr.receipt.extraction_error}"
+            else:
+                reason = f"confidence={mr.receipt.confidence} — Daten evtl. unvollständig"
+            gross = f"  {abs(mr.receipt.total_gross):.2f} EUR" if mr.receipt.total_gross else ""
+            vendor = mr.receipt.vendor[:35] if mr.receipt.vendor else "(kein Händler)"
+            print(f"    {mr.receipt.pdf_path.name}")
+            print(f"             → {vendor}{gross}")
+            print(f"             ⚠ {reason}")
         print()
 
     # EÜR summary
@@ -604,7 +616,10 @@ def write_html_report(
 ) -> None:
     matched  = [mr for mr in match_results if mr.matched_tx is not None]
     orphans  = [mr for mr in match_results if mr.matched_tx is None and not mr.receipt.extraction_error]
-    errors   = [mr for mr in match_results if mr.receipt.extraction_error]
+    unclear  = [
+        mr for mr in match_results
+        if mr.receipt.extraction_error or mr.receipt.confidence == "low"
+    ]
     eur_lines = build_eur_summary(match_results, unmatched_expenses)
 
     total_matched = sum(abs(mr.receipt.total_gross) for mr in matched)
@@ -693,17 +708,23 @@ def write_html_report(
             <td class="num"><strong>{tot_gross:.2f}</strong></td>
         </tr>"""
 
-    error_section = ""
-    if errors:
-        err_rows = "".join(
-            f"<tr><td><code>{mr.receipt.pdf_path.name}</code></td><td>{mr.receipt.extraction_error}</td></tr>"
-            for mr in errors
-        )
-        error_section = f"""
-<section>
-  <h2>Extraktionsfehler ({len(errors)})</h2>
-  <table><tr><th>Datei</th><th>Fehler</th></tr>{err_rows}</table>
-</section>"""
+    list4_rows = ""
+    for mr in sorted(unclear, key=lambda x: x.receipt.pdf_path.name):
+        if mr.receipt.extraction_error:
+            reason = f'<span class="conf-low">Fehler: {mr.receipt.extraction_error}</span>'
+        else:
+            reason = f'<span class="conf-low">confidence={mr.receipt.confidence} — Daten evtl. unvollständig</span>'
+        gross = f"{abs(mr.receipt.total_gross):.2f}" if mr.receipt.total_gross else "?"
+        vendor = mr.receipt.vendor[:40] if mr.receipt.vendor else "<em>(kein Händler erkannt)</em>"
+        in_list = "Liste 1" if mr.matched_tx else ("Liste 3" if not mr.receipt.extraction_error else "—")
+        list4_rows += f"""
+        <tr class="unclear">
+            <td><code>{mr.receipt.pdf_path.name}</code></td>
+            <td>{vendor}</td>
+            <td class="num">{gross}</td>
+            <td>{in_list}</td>
+            <td>{reason}</td>
+        </tr>"""
 
     def _empty(msg: str) -> str:
         return f"<p class='empty'>{msg}</p>"
@@ -711,6 +732,16 @@ def write_html_report(
     def _table(headers: list[str], rows: str) -> str:
         ths = "".join(f"<th>{h}</th>" for h in headers)
         return f"<table><tr>{ths}</tr>{rows}</table>"
+
+    list4_section = ""
+    if unclear:
+        list4_section = f"""
+<section>
+  <h2>Liste 4 — Nicht lesbar / Prüfung erforderlich ({len(unclear)})</h2>
+  {_table(["Datei","Händler","Brutto","Auch in","Grund"], list4_rows)}
+  <p class="eur-note">Diese Belege wurden trotzdem verarbeitet, soweit möglich.<br>
+  Bitte Scan-Qualität prüfen oder Daten manuell erfassen.</p>
+</section>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="de">
@@ -737,6 +768,7 @@ def write_html_report(
   tr.matched td {{ color: #86efac; }}
   tr.missing td {{ color: #fca5a5; }}
   tr.orphan  td {{ color: #fde68a; }}
+  tr.unclear td {{ color: #f87171; }}
   tr.total-row td {{ border-top: 1px solid #333; color: #f0f0f0; }}
   .num {{ text-align: right; white-space: nowrap; }}
   .small {{ font-size: 10px; color: inherit; opacity: 0.75; }}
@@ -776,6 +808,11 @@ def write_html_report(
     <div class="stat-sub">{total_orphan:.2f} EUR bar / anderer Monat</div>
   </div>
   <div class="stat">
+    <div class="stat-label">Liste 4 — nicht lesbar</div>
+    <div class="stat-value" style="color:#f87171">{len(unclear)}</div>
+    <div class="stat-sub">Prüfung erforderlich</div>
+  </div>
+  <div class="stat">
     <div class="stat-label">EÜR Brutto gesamt</div>
     <div class="stat-value" style="color:#f0f0f0">{tot_gross:.2f}</div>
     <div class="stat-sub">EUR (alle Belege + unbelegte Ausgaben)</div>
@@ -811,7 +848,7 @@ def write_html_report(
     Positionen ohne Vorsteuer-Aufteilung (fehlender Beleg): nur Brutto-Betrag erfasst.
   </p>
 </section>
-{error_section}
+{list4_section}
 </body>
 </html>"""
 
