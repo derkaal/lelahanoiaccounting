@@ -56,6 +56,24 @@ def csv_path(month: str) -> Path:
     return BASE_DIR / month / "output" / f"classified_{month}.csv"
 
 
+def load_receipt_matches(month: str) -> dict:
+    """
+    Load the receipt-match sidecar written by process_receipts.py.
+    Returns a dict keyed by (date, rounded_amount) → receipt filename.
+    """
+    path = BASE_DIR / month / "output" / f"receipt_matches_{month}.json"
+    if not path.exists():
+        return {}
+    try:
+        records = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            (r["tx_date"], round(float(r["tx_amount"]), 2)): r["receipt_file"]
+            for r in records
+        }
+    except Exception:
+        return {}
+
+
 def _parse_amount(value: str) -> float:
     """Parse a European-formatted amount string to float.
     Handles both '2.400,00' (European) and '2400.00' (plain) formats.
@@ -292,6 +310,7 @@ td input[type=text] { width: 100%; }
         <th>Vendor</th>
         <th style="min-width:220px">Buchungstext</th>
         <th style="text-align:right">Betrag&nbsp;€</th>
+        <th>Beleg</th>
         <th style="min-width:140px">Klassifikation</th>
         <th style="min-width:180px">Kategorie</th>
         <th style="min-width:180px">Notiz / Kennzeichen</th>
@@ -380,7 +399,7 @@ function updateStats() {
   const fcat   = document.getElementById("f-cat").value;
   const fsearch = (document.getElementById("f-search").value || "").toLowerCase();
 
-  let visible = 0, expenseSum = 0, cafeCount = 0;
+  let visible = 0, expenseSum = 0, cafeCount = 0, receiptCount = 0;
   rows.forEach(r => {
     if (fc && r.classification !== fc) return;
     if (fcat && r.category !== fcat) return;
@@ -388,13 +407,19 @@ function updateStats() {
     if (fsearch && !haystack.includes(fsearch)) return;
     visible++;
     const amt = parseFloat(r.amount_eur) || 0;
-    if (r.classification === "cafe_expense") { cafeCount++; expenseSum += amt; }
+    if (r.classification === "cafe_expense") {
+      cafeCount++;
+      expenseSum += amt;
+      if (r._receipt) receiptCount++;
+    }
   });
 
+  const receiptPct = cafeCount > 0 ? Math.round(receiptCount / cafeCount * 100) : 0;
   document.getElementById("stats").innerHTML = `
     <div class="stat"><div class="val">${visible}</div><div class="lbl">Buchungen (gefiltert)</div></div>
     <div class="stat"><div class="val">${cafeCount}</div><div class="lbl">Betriebsausgaben</div></div>
     <div class="stat"><div class="val">${Math.abs(expenseSum).toFixed(2).replace(".", ",")} €</div><div class="lbl">Betriebsausgaben (∑)</div></div>
+    <div class="stat"><div class="val">${receiptCount} / ${cafeCount} <span style="font-size:13px;color:#888">(${receiptPct}%)</span></div><div class="lbl">Belege vorhanden</div></div>
     <div class="stat"><div class="val">${changed.size}</div><div class="lbl">Ungespeicherte Änderungen</div></div>
   `;
 }
@@ -443,6 +468,19 @@ function renderTable() {
 
     // amount
     tr.appendChild(el("td", { class: amtClass, style: "text-align:right" }, fmtAmt(row.amount_eur)));
+
+    // receipt indicator
+    const receipt = row._receipt || "";
+    const tdR = el("td", { style: "white-space:nowrap;text-align:center" });
+    if (receipt) {
+      tdR.appendChild(el("span", {
+        title: receipt,
+        style: "color:#4caf7d;cursor:default;font-size:15px"
+      }, "✓"));
+    } else {
+      tdR.appendChild(el("span", { style: "color:#333;font-size:13px" }, "—"));
+    }
+    tr.appendChild(tdR);
 
     // classification select
     const tdCls = el("td");
@@ -556,7 +594,13 @@ def month_view(month: str):
             f"Bitte zuerst <code>classify.py --month {month}</code> ausführen.</p>",
             404,
         )
-    rows_clean = [{k: v for k, v in r.items() if k != "_id"} for r in rows]
+    receipt_matches = load_receipt_matches(month)
+    rows_clean = []
+    for r in rows:
+        row = {k: v for k, v in r.items() if k != "_id"}
+        key = (row.get("date", ""), round(float(row.get("amount_eur", 0)), 2))
+        row["_receipt"] = receipt_matches.get(key, "")
+        rows_clean.append(row)
     return render_template_string(
         EDITOR_HTML,
         month=month,

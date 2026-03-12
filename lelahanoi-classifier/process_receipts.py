@@ -931,6 +931,39 @@ def apply_moves(match_results: list[MatchResult], month: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Receipt-match sidecar  (read by editor.py)
+# ---------------------------------------------------------------------------
+
+def write_receipt_matches(
+    match_results: list,
+    month: str,
+) -> None:
+    """
+    Write a small JSON sidecar so editor.py can show receipt status.
+
+    Format: list of objects, one per matched receipt:
+      { "tx_date", "tx_amount", "tx_vendor", "receipt_file", "match_quality" }
+
+    Keyed on (tx_date, tx_amount) – same tolerance the matcher uses.
+    """
+    out_dir = Path(f"data/{month}/output")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    records = []
+    for mr in match_results:
+        if mr.matched_tx is None:
+            continue
+        records.append({
+            "tx_date":       mr.matched_tx.get("date", ""),
+            "tx_amount":     round(float(mr.matched_tx.get("amount_eur", 0)), 2),
+            "tx_vendor":     mr.matched_tx.get("vendor", ""),
+            "receipt_file":  mr.receipt.pdf_path.name,
+            "match_quality": mr.match_quality,
+        })
+    path = out_dir / f"receipt_matches_{month}.json"
+    path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1018,6 +1051,9 @@ def main() -> None:
     # Match
     print("\nAbgleich mit Kontoauszug-Ausgaben ...")
     match_results, unmatched_expenses = run_matching(receipts, expenses, args.month)
+
+    # Write sidecar for editor.py
+    write_receipt_matches(match_results, args.month)
 
     # Reports
     print_report(match_results, unmatched_expenses, args.month)
