@@ -270,7 +270,9 @@ def parse_bank_csv(
     col_date = find_col(df, "Buchungstag", "Datum", "Date")
     col_text = find_col(df, "Buchungstext", "Verwendungszweck", "Text")
     col_vorgang = find_col(df, "Vorgang", "Buchungsart", "Art")
-    col_amount = find_col(df, "Umsatz", "Betrag", "Amount")
+    # "Umsatz in EUR" is checked first so the more general "Umsatz" fallback
+    # never matches "Umsatztag" (the transaction-date column) instead.
+    col_amount = find_col(df, "Umsatz in EUR", "Umsatz", "Betrag", "Amount")
 
     missing = []
     if not col_date:
@@ -426,10 +428,11 @@ def parse_credit_csv(
     col_date = find_col(df, "Buchungstag", "Datum", "Date")
     col_text = find_col(df, "Buchungstext", "Verwendungszweck", "Text")
     col_vorgang = find_col(df, "Vorgang", "Buchungsart", "Art")
-    # "Umsatz in" matches "Umsatz in EUR" but NOT "Umsatztag" (the transaction-date
-    # column Comdirect puts earlier in the file, which would otherwise be picked up
-    # first by a plain "Umsatz" substring match).
-    col_amount = find_col(df, "Umsatz in", "Betrag", "Amount")
+    # "Umsatz in EUR" is the exact Comdirect column name and is checked first so
+    # neither "Umsatztag" (date column, matches plain "Umsatz") nor
+    # "Umsatz in Fremdwährung" (foreign-currency column, matches "Umsatz in")
+    # can be picked up before the actual amount column.
+    col_amount = find_col(df, "Umsatz in EUR", "Umsatz in", "Betrag", "Amount")
 
     missing = []
     if not col_date:
