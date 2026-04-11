@@ -1,5 +1,6 @@
 anthropic>=0.34.0
 flask>=3.0.0
 pandas>=2.0.0
+pdfplumber>=0.10.0
 pymupdf>=1.24.0
 python-dotenv>=1.0.0

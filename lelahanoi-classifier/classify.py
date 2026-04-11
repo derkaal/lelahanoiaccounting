@@ -472,9 +472,10 @@ def parse_credit_csv(
             if not date_parsed.startswith(f"{year}-{mo}"):
                 continue
 
-        # Comdirect Visa CSV exports purchases as positive (amount charged to card).
-        # Negate so purchases are negative, consistent with the Girokonto convention.
-        amount = -_parse_german_amount(amount_raw)
+        # Comdirect Visa CSV already uses the same sign convention as Girokonto:
+        # negative = charge/purchase, positive = settlement/refund.
+        # No negation needed.
+        amount = _parse_german_amount(amount_raw)
 
         # For credit card, Buchungstext is already the merchant name
         vendor = _extract_credit_vendor(buchungstext, vorgang)
