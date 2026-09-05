@@ -1,0 +1,14 @@
+# Secrets and local data — never commit
+.env
+.env.*
+!.env.example
+data/
+*.local.*
+out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
